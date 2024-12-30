@@ -1,12 +1,13 @@
 import os
+import re
 import hashlib
 import tinify
 
 # 设置 Tinify API Keys
 tinify_keys = [
-    "8jyW19mHGVSFWSQ1VDZFpzWl9jlhMmwT",
-    "another_api_key_1",
-    "another_api_key_2"
+    "tinify_keys1",
+    "tinify_keys2",
+    "tinify_keys3"
 ]
 current_key_index = 0
 
@@ -14,7 +15,7 @@ current_key_index = 0
 tinify.key = tinify_keys[current_key_index]
 
 # 提供需要压缩的文件夹路径
-folder_to_compress = "C:\\Users\\huangxina\\Pictures"
+folder_to_compress = r"D:\project\x20pro_02_hood\oven"
 
 # 设置最小图片大小（字节），小于此大小的图片将不压缩
 min_image_size = 20 * 1024  # 20 KB
@@ -22,11 +23,20 @@ min_image_size = 20 * 1024  # 20 KB
 # 是否替换原图片
 replace_original = True
 
-# 白名单文件
-whitelist = ["example1.png", "example2.jpg"]
+# 白名单文件和文件夹，支持正则匹配
+whitelist = [
+    r".*example1\.png$",  # 匹配文件名为 example1.png
+    r".*example2\.jpg$",  # 匹配文件名为 example2.jpg
+    r"^icon_pot_anim_.*$",  # 匹配文件名以 icon_pot_anim_ 开头的文件
+    r"^icon_roast_anim_.*$",  # 匹配文件名以 icon_roast_anim_ 开头的文件
+    r"^icon_steam_anim_.*$",  # 匹配文件名以 icon_steam_anim_ 开头的文件
+    r"^icon_super_charge_.*$",  # 匹配文件名以 icon_super_charge_ 开头的文件
+    r".*folder_name.*"     # 匹配包含 folder_name 的文件夹
+]
 
 # 已压缩文件的 MD5 记录文件
 md5_record_file = os.path.join(folder_to_compress, "compressed_files_md5.txt")
+md5_tmp_file = os.path.join(folder_to_compress, "compressed_files_md5.txt.tmp")
 
 def switch_tinify_key():
     """
@@ -51,16 +61,6 @@ def load_compressed_md5():
         return set()
     with open(md5_record_file, "r") as file:
         return set(line.strip() for line in file)
-
-def save_compressed_md5(md5_hash):
-    """
-    保存新压缩文件的 MD5 到记录文件。
-
-    参数：
-        md5_hash (str): 文件的 MD5 值。
-    """
-    with open(md5_record_file, "a") as file:
-        file.write(md5_hash + "\n")
 
 def calculate_md5(file_path):
     """
@@ -93,31 +93,54 @@ def compress_images_in_folder(folder_path):
     # 加载已压缩文件的 MD5 列表
     compressed_md5 = load_compressed_md5()
 
-    # 遍历文件夹
-    for root, dirs, files in os.walk(folder_path):
-        for file in files:
-            if file.lower().endswith(('.png', '.jpg', '.jpeg')):
-                if file in whitelist:
-                    print(f"跳过白名单文件: {file}")
+    try:
+        # 打开临时文件用于记录新压缩的 MD5
+        with open(md5_tmp_file, "w") as tmp_file:
+            # 遍历文件夹
+            for root, dirs, files in os.walk(folder_path):
+                # 检查文件夹是否匹配白名单
+                if any(re.match(pattern, root) for pattern in whitelist):
+                    print(f"跳过文件夹: {root}")
                     continue
 
-                file_path = os.path.join(root, file)
-                file_md5 = calculate_md5(file_path)
+                for file in files:
+                    # 检查文件名是否匹配白名单
+                    if any(re.match(pattern, file) for pattern in whitelist):
+                        print(f"跳过白名单文件: {file}")
+                        continue
 
-                if file_md5 in compressed_md5:
-                    print(f"文件已压缩过，跳过: {file_path}")
-                    continue
+                    if file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                        file_path = os.path.join(root, file)
+                        file_md5 = calculate_md5(file_path)
 
-                try:
-                    compress_image(file_path, compress_folder if not replace_original else None)
-                    save_compressed_md5(file_md5)
-                except tinify.AccountError:
-                    print(f"API 使用限制已达到，切换到下一个 API Key。")
-                    switch_tinify_key()
-                    compress_image(file_path, compress_folder if not replace_original else None)
-                    save_compressed_md5(file_md5)
-                except Exception as e:
-                    print(f"跳过图片: {file_path}, 错误: {e}")
+                        # 如果文件已经被压缩过，跳过
+                        if file_md5 in compressed_md5:
+                            print(f"文件已压缩过，跳过: {file_path}")
+                            tmp_file.write(file_md5 + "\n")
+                            continue
+
+                        try:
+                            # 压缩文件
+                            compress_image(file_path, compress_folder if not replace_original else None)
+                            # 保存已压缩的文件 MD5
+                            tmp_file.write(file_md5 + "\n")
+                        except tinify.AccountError:
+                            print(f"API 使用限制已达到，切换到下一个 API Key。")
+                            switch_tinify_key()
+                            compress_image(file_path, compress_folder if not replace_original else None)
+                            tmp_file.write(file_md5 + "\n")
+                        except Exception as e:
+                            print(f"跳过图片: {file_path}, 错误: {e}")
+
+        # 任务完成后覆盖 MD5 记录文件
+        os.replace(md5_tmp_file, md5_record_file)
+        print("MD5 记录文件更新完成。")
+
+    finally:
+        # 清理临时文件
+        if os.path.exists(md5_tmp_file):
+            os.remove(md5_tmp_file)
+            print(f"已删除临时文件: {md5_tmp_file}")
 
 def compress_image(file_path, compress_folder):
     """
@@ -132,7 +155,7 @@ def compress_image(file_path, compress_folder):
 
     # 跳过小于最小大小的图片
     if original_size < min_image_size:
-        print(f"跳过压缩（文件太小）: {file_path}，大小: {original_size} 字节")
+        print(f"跳过压缩（文件太小）: {file_path}，大小: {original_size / 1024:.2f} kB")
         return
 
     print(f"正在压缩图片: {file_path}")
@@ -152,7 +175,7 @@ def compress_image(file_path, compress_folder):
     # 计算压缩百分比
     reduction = ((original_size - compressed_size) / original_size) * 100
 
-    print(f"压缩完成: {file_path}，原始大小: {original_size} 字节，压缩后大小: {compressed_size} 字节，压缩百分比: {reduction:.2f}%")
+    print(f"压缩完成: {file_path}，原始大小: {original_size / 1024:.2f} kB，压缩后大小: {compressed_size / 1024:.2f} kB，压缩百分比: {reduction:.2f}%")
 
 if __name__ == "__main__":
     if os.path.isdir(folder_to_compress):
